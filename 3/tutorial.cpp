@@ -1,19 +1,9 @@
-/*
- * Copyright (c) 2017, Adrian Michel
- * http://www.amichel.com
- *
- * This software is released under the 3-Clause BSD License
- *
- * The complete terms can be found in the attached LICENSE file
- * or at https://opensource.org/licenses/BSD-3-Clause
- */
-
 #include <vector>
 #include <differential_evolution.hpp>
 #include <iostream>
 #include <random>
 #include <iomanip>
-#include "objective_function.h"
+#include <fstream>
 
 using namespace std;
 
@@ -109,10 +99,10 @@ class sphere_function {
 class my_listener : public listener {
 public:
 	virtual void start() {
-		cout << setw(10) << "Generation" << setw(10) << "Metric" << endl;
+		//cout << setw(10) << "Generation" << setw(10) << "Metric" << endl;
 	}
 	virtual void end() {
-		cout << endl;
+		//cout << endl;
 	}
 	virtual void error() {}
 	virtual void startGeneration(size_t genCount) {
@@ -120,7 +110,7 @@ public:
 	virtual void endGeneration(size_t genCount, individual_ptr bestIndGen,
 		individual_ptr bestInd) {
 		if (genCount % 10 == 0) {
-			cout << "\r" << setw(10) << genCount << setw(10) << bestInd->cost();
+			//cout << "\r" << setw(10) << genCount << setw(10) << bestInd->cost();
 		}
 	}
 	virtual void startSelection(size_t genCount) {}
@@ -129,9 +119,7 @@ public:
 	virtual void endProcessors(size_t genCount) {}
 };
 
-#define POPULATION_SIZE 200
-
-vector<double> evolve(const vector<pair<double, double>>& points, int coefsCount) {
+vector<double> evolve(const vector<pair<double, double>>& points, int coefsCount, int generations, int populationSize) {
 	try {
 		constraints_ptr constraints(std::make_shared<constraints>(coefsCount, -1.0e3, 1.0e3));
 		for (int i = 0; i < coefsCount; i++) {
@@ -145,7 +133,7 @@ vector<double> evolve(const vector<pair<double, double>>& points, int coefsCount
 
 		processors<sphere_function>::processors_ptr _processors(std::make_shared<processors<sphere_function>>(32, std::ref(of), processor_listener));
 
-		termination_strategy_ptr terminationStrategy(std::make_shared<max_gen_termination_strategy>(1000));
+		termination_strategy_ptr terminationStrategy(std::make_shared<max_gen_termination_strategy>(generations));
 
 		selection_strategy_ptr selectionStrategy(std::make_shared<best_parent_child_selection_strategy>());
 
@@ -153,7 +141,7 @@ vector<double> evolve(const vector<pair<double, double>>& points, int coefsCount
 		mutation_strategy_ptr mutationStrategy(std::make_shared<mutation_strategy_1>(coefsCount, mutation_arguments));
 		differential_evolution<sphere_function> de(
 			coefsCount, 
-			POPULATION_SIZE, 
+			populationSize, 
 			_processors, 
 			constraints, 
 			false /* is minimize? */,
@@ -166,7 +154,7 @@ vector<double> evolve(const vector<pair<double, double>>& points, int coefsCount
 		de.run();
 
 		individual_ptr best(de.best());
-		std::cout << "Best metric after evolution: " << of(best->vars()) << endl;
+		//std::cout << "Best metric after evolution: " << of(best->vars()) << endl;
 		return toCoefs(best->vars());
 	} catch (const amichel::de::exception& e) {
 		std::cout << "an error occurred: " << e.what();
@@ -179,38 +167,36 @@ void addNoise(double& value, double noisePercent) {
 	//value *= 1 + normalRandom()*noisePercent;
 }
 
-int main() {
-	vector<double> coefs;
-	for (int i = 0; i < 10; i++) {
-		coefs.push_back(random(-10, 10));
-		//coefs.push_back(10);
-	}
-
+double calcEvolutionDistance(vector<double>& coefs, int generations, int populationSize, int pointsCount, double noisePercent, bool isPrint) {
 	vector<pair<double, double>> points;
-	for (int i = 0; i < coefs.size() + 3; i++) {
-		double x = random(-10, 10);
+	for (int i = 0; i < pointsCount; i++) {
+		double x = random(-20, 20);
 		double y = calcPolynom(coefs, x);
-		double noisePercent = 0.00;
-		//addNoise(x, noisePercent);
 		addNoise(y, noisePercent);
 		points.push_back({ x, y });
 	}
 
-	sphere_function of(points);
-	amichel::de::DVector a(coefs.begin(), coefs.end());
-	cout << "Metric for true coefficients: " << of(make_shared<DVector>(a)) << endl;
-	cout << endl;
+	auto result = evolve(points, coefs.size(), generations, populationSize);
 
-	auto result = evolve(points, coefs.size());
-	cout << endl;
+	return distance(coefs, result);
+}
 
-	cout << setprecision(3);
-	cout << setw(10) << "Found" << setw(10) << "True" << setw(10) << "|f - t|" << endl;
-	cout << setw(10) << "----------" << setw(10) << "----------" << setw(10) << "----------" << endl;
-	for (int i = 0; i < coefs.size(); i++) {
-		cout << setw(10) << result[i] << setw(10) << coefs[i] << setw(10) << fabs(result[i] - coefs[i]) << endl;
+int main() {
+	vector<double> coefs = { -10, 0, 3.1, 88, 5, -15, 10 };
+
+	auto result = calcEvolutionDistance(coefs, 200, 200, 20, 0.0, true);
+	cout << result << endl;
+
+	std::ofstream fout("out.txt");
+
+	int counter = 0;
+	for (double percent = 0; percent < 0.10; percent += 0.01) {
+		for (int points = 8; points < 1500; points *= 1.2) {
+			counter++;
+			std::cout << "\r" << std::setw(5) << counter * 100 / (28 * 10) << "%";
+			auto result = calcEvolutionDistance(coefs, 200, 200, points, percent, false);
+			fout << percent << "\t" << points << "\t" << result << std::endl;
+		}
 	}
-	cout << endl;
-
-	cout << "Distance: " << distance(coefs, result) << endl;
+	fout.close();
 }

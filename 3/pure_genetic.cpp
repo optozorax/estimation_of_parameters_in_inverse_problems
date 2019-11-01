@@ -5,6 +5,7 @@
 #include <iostream>
 #include <iomanip>
 #include <functional>
+#include <fstream>
 
 class PolynomCreature;
 typedef std::shared_ptr<PolynomCreature> PolynomCreature_ptr;
@@ -72,6 +73,10 @@ double evalByPosition(double value, double sum, int pos, int size) {
 	return 1 / pow(1.1, pos);
 }
 
+double evalByValue(double value, double sum, int pos, int size) {
+	return value;
+}
+
 template<class Creature>
 class Evolution {
 public:
@@ -99,9 +104,12 @@ public:
 		}
 	}
 
-	void evolve(int generations) {
+	void evolve(int generations, bool isPrint) {
 		for (int i = 0; i < generations; ++i) {
 			evolveIter();
+			if (i % 10 == 0 && isPrint) {
+				std::cout << "\r" << std::setw(10) << std::fixed << std::setprecision(1) << i * 100.0 / generations << '%';
+			}
 		}
 	}
 
@@ -255,18 +263,7 @@ double distance(const Points& a, const PolynomCreature& c) {
 	return sum / a.size();
 }
 
-int main() {
-	/**
-		Сгенерировать полином
-		Сгенерировать для него точки
-
-	 */
-
-	PolynomCreature creature;
-	creature.values = {-10, 0, 3.1, 88, 5, -15, 10};
-
-	const int pointsCount = 10000;
-	const double noisePercent = 0.05;
+double calcEvolutionDistance(PolynomCreature& creature, int generations, int populationSize, int pointsCount, double noisePercent, bool isPrint) {
 	Points points;
 	for (int i = 0; i < pointsCount; ++i) {
 		double x = rnd.randomDouble(-20, 20);
@@ -275,31 +272,54 @@ int main() {
 		points.push_back({x, y});
 	}
 
-	Evolution<PolynomCreature> e(200, [&] (const PolynomCreature& c) -> double {
+	Evolution<PolynomCreature> e(populationSize, [&](const PolynomCreature& c) -> double {
 		return distance(points, c);
 	}, [&]() -> PolynomCreature_ptr {
-		return makeRandom(creature.values.size(), -20, 20);
+		return makeRandom(creature.values.size(), -100, 100);
 	});
 
-	e.evolve(2000);
+	e.evolve(generations, isPrint);
 
 	auto res = e.getBest();
 
 	using namespace std;
 
-	cout << "Metric for true coefficients: " << distance(points, creature) << endl;
-	cout << endl;
+	if (isPrint) {
+		cout << "Metric for true coefficients: " << distance(points, creature) << endl;
+		cout << endl;
 
-	cout << setprecision(3);
-	cout << setw(10) << "Found" << setw(10) << "True" << setw(10) << "|f - t|" << endl;
-	cout << setw(10) << "----------" << setw(10) << "----------" << setw(10) << "----------" << endl;
-	auto& coefs = creature.values;
-	auto& result = res.first->values;
-	for (int i = 0; i < coefs.size(); i++) {
-		cout << setw(10) << result[i] << setw(10) << coefs[i] << setw(10) << fabs(result[i] - coefs[i]) << endl;
+		cout << setprecision(3);
+		cout << setw(10) << "Found" << setw(10) << "True" << setw(10) << "|f - t|" << endl;
+		cout << setw(10) << "----------" << setw(10) << "----------" << setw(10) << "----------" << endl;
+		auto& coefs = creature.values;
+		auto& result = res.first->values;
+		for (int i = 0; i < coefs.size(); i++) {
+			cout << setw(10) << result[i] << setw(10) << coefs[i] << setw(10) << fabs(result[i] - coefs[i]) << endl;
+		}
+		cout << endl;
+
+		cout << "Metric for result: " << distance(points, *res.first) << endl;
+		cout << "Distance: " << distance(creature, *res.first) << endl;
 	}
-	cout << endl;
 
-	cout << "Metric for result: " << distance(points, *res.first) << endl;
-	cout << "Distance: " << distance(creature, *res.first) << endl;
+	return distance(creature, *res.first);
+}
+
+int main() {
+	PolynomCreature creature;
+	creature.values = {-10, 0, 3.1, 88, 5, -15, 10};
+	auto result = calcEvolutionDistance(creature, 2000, 200, 40, 0.0, true);
+
+	std::ofstream fout("out.txt");
+
+	int counter = 0;
+	for (double percent = 0; percent < 0.10; percent += 0.01) {
+		for (int points = 8; points < 1500; points *= 1.2) {
+			counter++;
+			std::cout << "\r" << std::setw(5) << counter * 100 / (28 * 10) << "%";
+			auto result = calcEvolutionDistance(creature, 2000, 200, points, percent, false);
+			fout << percent << "\t" << points << "\t" << result << std::endl;
+		}
+	}
+	fout.close();
 }
