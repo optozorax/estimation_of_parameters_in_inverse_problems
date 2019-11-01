@@ -1,3 +1,5 @@
+#define _CRT_SECURE_NO_WARNINGS
+
 #include <random>
 #include <memory>
 #include <vector>
@@ -6,6 +8,12 @@
 #include <iomanip>
 #include <functional>
 #include <fstream>
+#include <thread>
+#include <future>
+#include <map>
+#include <mutex>
+#include <chrono>
+#include <sstream>
 
 class PolynomCreature;
 typedef std::shared_ptr<PolynomCreature> PolynomCreature_ptr;
@@ -36,10 +44,12 @@ public:
 		values[rnd.randomInt(0, values.size()-1)] *= rnd.randomDouble(-2, 2);
 	}
 
-	void mutate(int count) {
-		for (int i = 0; i < count; ++i) {
-			mutateSingle();
-		}
+	void mutateSlightly(void) {
+		values[rnd.randomInt(0, values.size() - 1)] *= rnd.randomDouble(0.9, 1.1);
+	}
+
+	void mutateSuperSlightly(void) {
+		values[rnd.randomInt(0, values.size() - 1)] *= rnd.randomDouble(0.91, 1.01);
 	}
 
 	PolynomCreature() = default;
@@ -70,7 +80,7 @@ PolynomCreature_ptr makeRandom(int size, double a, double b) {
 }
 
 double evalByPosition(double value, double sum, int pos, int size) {
-	return 1 / pow(1.1, pos);
+	return 1 / pow(1.1, pos+1);
 }
 
 double evalByValue(double value, double sum, int pos, int size) {
@@ -92,7 +102,7 @@ public:
 		int populationSize, 
 		EvalFunction max, 
 		CreatureGenerator generator
-	) : max(max), generator(generator) {
+	) : max(max), generator(generator), mutateNormal(true), mutateSuperSlightly(false) {
 		init(populationSize);
 	}
 
@@ -104,23 +114,58 @@ public:
 		}
 	}
 
-	void evolve(int generations, bool isPrint) {
-		for (int i = 0; i < generations; ++i) {
-			evolveIter();
+	CreatureWithScore evolve(int attempts, bool isPrint) {
+		CreatureWithScore best = {population[0], max(*population[0])};
+		for (int i = 0; i < attempts; ++i) {
+			init(population.size());
+			auto res = evolveAttempt();
+			if (res.second > best.second) {
+				best = res;
+				if (isPrint) {
+					std::cout << "\r" << "Found best creature with metric: " << std::setprecision(3) << best.second << std::endl;
+				}
+			}
 			if (i % 10 == 0 && isPrint) {
-				std::cout << "\r" << std::setw(10) << std::fixed << std::setprecision(1) << i * 100.0 / generations << '%';
+				std::cout << "\r" << std::setw(10) << std::fixed << std::setprecision(1) << i * 100.0 / attempts << '%';
 			}
 		}
-	}
+		if (isPrint)
+			std::cout << "\r" << std::setw(10) << "  \r";
 
-	CreatureWithScore getBest(void) const {
-		return evalScores(evalByPosition)[0];
+		if (isPrint)
+			std::cout << "Start to optimize best creature" << std::endl;
+		mutateNormal = false;
+		mutateSuperSlightly = true;
+
+		std::vector<Creature_ptr> population1;
+		for (auto& i : population)
+			population1.emplace_back(new Creature(*best.first));
+		population = population1;
+
+		for (int i = 0; i < attempts * 10; ++i) {
+			auto scores = evalScores(evalByValue);
+			if (scores[0].second > best.second) {
+				best = scores[0];
+				if (isPrint) {
+					std::cout << "\r" << "Found best creature with metric: " << std::setprecision(3) << best.second << std::endl;
+				}
+			}
+
+			auto [population1, efficiency] = makeNewPopulation(scores);
+			population = population1;
+		}
+
+		mutateSuperSlightly = false;
+
+		return best;
 	}
 
 private:
 	Creatures population;
 	EvalFunction max;
 	CreatureGenerator generator;
+	bool mutateNormal;
+	bool mutateSuperSlightly;
 
 	CreatureScores evalScores(const std::function<double(double value, double sum, int pos, int size)>& normalize) const {
 		CreatureScores result;
@@ -144,6 +189,7 @@ private:
 		sum = 0;
 		for (auto& i : result) {
 			i.second = normalize(i.second, sum, pos, result.size());
+			sum += i.second;
 			pos++;
 		}
 
@@ -154,79 +200,60 @@ private:
 		return result;
 	}
 
-	Creatures makeNewPopulation(const CreatureScores& scores) {
+	std::pair<Creatures, double> makeNewPopulation(const CreatureScores& scores) {
 		Creatures result;
-		result.reserve(scores.size() + 3);
+		result.reserve(scores.size());
 
-		// Получаем существо с некоторой вероятностью (у лучших больше вероятность)
-		auto getProbablyBestCreature = [&scores] (void) -> const Creature_ptr {
-			double p = rnd.randomDouble(0, 1);
-			for (int i = 0; i < scores.size(); ++i) {
-				if (p < scores[i].second) {
-					return scores[i].first;
+		auto best = scores[0].first;
+		auto bestValue = scores[0].second;
+		result.emplace_back(new Creature(*best));
+
+		for (int i = 0; i < population.size()-1; ++i) {
+			result.emplace_back(new Creature(*best));
+			if (mutateSuperSlightly) {
+				if (i % 2 == 0) {
+					result.back()->mutateSingle();
+					result.back()->mutateSingle();
+				} else {
+					result.back()->mutateSuperSlightly();
 				}
-				p -= scores[i].second;
+			} else {
+				if (mutateNormal) {
+					result.back()->mutateSingle();
+				} else {
+					result.back()->mutateSlightly();
+				}
 			}
-			throw std::exception();
-		};
-
-		int size = scores.size();
-
-		// Выбираем 5% без изменений
-		for (int i = 0; i < 0.05 * size; ++i) {
-			Creature_ptr creature(new Creature(*getProbablyBestCreature()));
-			result.emplace_back(creature);
 		}
 
-		// Мутируем 45% одной мутацией
-		for (int i = 0; i < 0.45 * size; ++i) {
-			result.emplace_back(new Creature(*getProbablyBestCreature()));
-			result.back()->mutate(1);
-		}
-
-		// Мутируем 10% двумя мутациями
-		for (int i = 0; i < 0.10 * size; ++i) {
-			result.emplace_back(new Creature(*getProbablyBestCreature()));
-			result.back()->mutate(2);
-		}
-
-		// Мутируем 10% тремя мутациями
-		for (int i = 0; i < 0.10 * size; ++i) {
-			result.emplace_back(new Creature(*getProbablyBestCreature()));
-			result.back()->mutate(3);
-		}
-
-		// Мутируем 10% четырьмя мутациями
-		for (int i = 0; i < 0.10 * size; ++i) {
-			result.emplace_back(new Creature(*getProbablyBestCreature()));
-			result.back()->mutate(4);
-		}
-
-		// Мутируем 10% пятью мутациями
-		for (int i = 0; i < 0.10 * size; ++i) {
-			result.emplace_back(new Creature(*getProbablyBestCreature()));
-			result.back()->mutate(5);
-		}
-
-		// Создаём новые 10%
-		for (int i = 0; i < 0.10 * size; ++i) {
-			result.push_back(generator());
-		}
-
-		// Нормализуем количество особей
-		while (result.size() > size) {
-			result.pop_back();
-		}
-		while (result.size() < size) {
-			result.push_back(generator());
-		}
-
-		return result;
+		return {result, max(*best)};
 	}
 
-	void evolveIter(void) {
-		auto scores = evalScores(evalByPosition);
-		population = makeNewPopulation(scores);
+	CreatureWithScore evolveAttempt(void) {
+		mutateNormal = true;
+		std::vector<double> lge; // Last generations efficiency
+		const int exitCount = 20;
+		for (int i = 0; i < 2000; i++) {
+			auto scores = evalScores(evalByValue);
+			if (lge.size() == exitCount && lge.front() == lge.back()) {
+				return { scores[0].first, max(*scores[0].first) };
+			}
+
+			auto [population1, efficiency] = makeNewPopulation(scores);
+			population = population1;
+
+			if (!lge.empty() && lge.back() == efficiency) {
+				mutateNormal = false;
+			}
+
+			lge.push_back(efficiency);
+			if (lge.size() > exitCount) {
+				lge.erase(lge.begin());
+			}
+		}
+
+		auto scores = evalScores(evalByValue);
+		return { scores[0].first, max(*scores[0].first) };
 	}
 };
 
@@ -263,7 +290,7 @@ double distance(const Points& a, const PolynomCreature& c) {
 	return sum / a.size();
 }
 
-double calcEvolutionDistance(PolynomCreature& creature, int generations, int populationSize, int pointsCount, double noisePercent, bool isPrint) {
+double calcEvolutionDistance(const PolynomCreature& creature, int generations, int populationSize, int pointsCount, double noisePercent, bool isPrint) {
 	Points points;
 	for (int i = 0; i < pointsCount; ++i) {
 		double x = rnd.randomDouble(-20, 20);
@@ -278,14 +305,15 @@ double calcEvolutionDistance(PolynomCreature& creature, int generations, int pop
 		return makeRandom(creature.values.size(), -100, 100);
 	});
 
-	e.evolve(generations, isPrint);
-
-	auto res = e.getBest();
+	auto res = e.evolve(generations, isPrint);
 
 	using namespace std;
 
 	if (isPrint) {
+		cout << setprecision(3);
 		cout << "Metric for true coefficients: " << distance(points, creature) << endl;
+		cout << "Metric for result: " << res.second << endl;
+		cout << "Distance: " << distance(creature, *res.first) << endl;
 		cout << endl;
 
 		cout << setprecision(3);
@@ -297,29 +325,223 @@ double calcEvolutionDistance(PolynomCreature& creature, int generations, int pop
 			cout << setw(10) << result[i] << setw(10) << coefs[i] << setw(10) << fabs(result[i] - coefs[i]) << endl;
 		}
 		cout << endl;
-
-		cout << "Metric for result: " << distance(points, *res.first) << endl;
-		cout << "Distance: " << distance(creature, *res.first) << endl;
 	}
 
 	return distance(creature, *res.first);
 }
 
+class percent_time_analyzer
+{
+public:
+	percent_time_analyzer() : time(0) {}
+
+	void start() {
+		using namespace std;
+		time = getCurrentTime();
+		cout << setfill(' ') << setiosflags(ios_base::right);
+		cout << "Percent |" << setw(23) << "Time passed |" << setw(23) << "Approximate time |" << setw(24) << "Time Left |" << endl;
+		cout << setfill('-') << setw(79) << '|' << endl;
+		cout << setfill(' ');
+	}
+
+	void print_percent(double percent) {
+		static std::mutex m;
+		std::lock_guard<std::mutex> g(m);
+
+		using namespace std;
+		stringstream sout;
+
+		//cout << '\r';
+
+		sout.str(std::string());
+		sout << setprecision(2) << percent * 100 << "% |";
+		cout << setw(9) << sout.str();
+
+		sout.str(std::string());
+		sout << getTimeString(getTimePassed(time)) << " |";
+		cout << setw(23) << sout.str();
+
+		sout.str(std::string());
+		sout << getTimeString(getApproxTime(time, percent)) << " |";
+		cout << setw(23) << sout.str();
+
+		sout.str(std::string());
+		sout << getTimeString(getLeftTime(time, percent)) << " |";
+		cout << setw(24) << sout.str();
+
+		cout << endl;
+	}
+
+	void end() {
+		using namespace std;
+		cout << '\r' << setw(9) << "100% |";
+
+		stringstream sout;
+		sout.clear();
+		sout << getTimeString(getTimePassed(time)) << " |";
+		cout << setw(23) << sout.str();
+
+		cout << setw(23) << "0s |" << setw(24) << "0s |" << endl;
+		cout << endl;
+	}
+private:
+	double time;
+
+	typedef std::chrono::high_resolution_clock hrc;
+
+	//-------------------------------------------------------------------------
+	float getCurrentTime(void) {
+		static hrc::time_point t = hrc::now();
+		return std::chrono::duration<double>(hrc::now() - t).count();
+	}
+
+	//-------------------------------------------------------------------------
+	float getTimePassed(float pastTime) {
+		return getCurrentTime() - pastTime;
+	}
+
+	//-------------------------------------------------------------------------
+	float getApproxTime(float pastTime, float percent) {
+		if (percent == 0)
+			return 0;
+		else
+			return getTimePassed(pastTime) / percent;
+	}
+
+	//-------------------------------------------------------------------------
+	float getLeftTime(float pastTime, float percent) {
+		if (percent == 0)
+			return 0;
+		else
+			return getApproxTime(pastTime, percent) - getTimePassed(pastTime);
+	}
+
+	//-------------------------------------------------------------------------
+	std::string getTimeString(float time) {
+		char s[25] = {};
+		if (true) {
+			if (time > 86400)
+				sprintf(s, "%2dd %2dh %2dm %2ds", int(time / 86400), int(time / 3600) % 24, int(time / 60) % 60, int(time) % 60);
+			else
+				if (time > 3600)
+					sprintf(s, "    %2dh %2dm %2ds", int(time / 3600) % 24, int(time / 60) % 60, int(time) % 60);
+				else
+					if (time > 60)
+						sprintf(s, "        %2dm %2ds", int(time / 60) % 60, int(time) % 60);
+					else
+						sprintf(s, "            %2ds", int(time) % 60);
+		}
+		else {
+			if (time > 86400)
+				sprintf(s, "%2dd %2dh %2dm %2ds", int(time / 86400), int(time / 3600) % 24, int(time / 60) % 60, int(time) % 60);
+			else
+				if (time > 3600)
+					sprintf(s, "%2dh %2dm %2ds", int(time / 3600) % 24, int(time / 60) % 60, int(time) % 60);
+				else
+					if (time > 60)
+						sprintf(s, "%2dm %2ds", int(time / 60) % 60, int(time) % 60);
+					else
+						sprintf(s, "%2ds", int(time) % 60);
+		}
+		return std::string(s);
+	}
+};
+
+template<class Ret, class Key>
+class async_performer_t
+{
+public:
+	void add(const std::function<Ret(void)>& f, const Key& key) {
+		mf.push_back({key, f});
+	}
+
+	void finish(void) {
+		int counter = 0;
+		std::mt19937 gen(0);
+		std::shuffle(mf.begin(), mf.end(), gen);
+		percent_time_analyzer time;
+		time.start();
+		
+		int threads = 4;
+
+		std::mutex mm;
+		std::vector<std::thread> threads_mas;
+		auto start = mf.begin();
+		auto count = mf.size() / threads;
+		for (int i = 0; i < threads; ++i) {
+			threads_mas.push_back(std::thread([&](MF::iterator start, MF::iterator end) {
+				for (auto i = start; i != end; ++i) {
+					auto value = i->second();
+
+					mm.lock();
+					m[i->first] = value;
+					counter++;
+					time.print_percent(double(counter) / mf.size());
+					mm.unlock();
+				}
+			}, start, start + count));
+			start += count;
+		}
+		for (auto& i : threads_mas)
+			i.join();
+		std::cout << "\r       \r";
+	}
+
+	auto begin(void) { return m.begin(); }
+	auto end(void) { return m.end(); }
+
+	Ret& operator[](const Key& key) { return m[key]; }
+	const Ret& operator[](const Key& key) const { return m.at(key); }
+private:
+	typedef std::vector<std::pair<Key, std::function<Ret(void)>>> MF;
+	MF mf;
+	std::map<Key, Ret> m;
+};
+
 int main() {
 	PolynomCreature creature;
 	creature.values = {-10, 0, 3.1, 88, 5, -15, 10};
-	auto result = calcEvolutionDistance(creature, 2000, 200, 40, 0.0, true);
+	//auto result = calcEvolutionDistance(creature, 200, 30, 15, 0.0, true);
 
-	std::ofstream fout("out.txt");
+	double max_points = 5000;
+	double start_points = 8;
+	double mul_points = 1.1;
+
+	double start_percent = 0;
+	double max_percent = 0.20;
+	double sum_percent = 0.005;
+
+	int evolutionRepeats = 25;
+	int attempts = 50;
+	int populationSize = 30;
+
+	async_performer_t<double, std::pair<double, int>> performer;
 
 	int counter = 0;
-	for (double percent = 0; percent < 0.10; percent += 0.01) {
-		for (int points = 8; points < 1500; points *= 1.2) {
-			counter++;
-			std::cout << "\r" << std::setw(5) << counter * 100 / (28 * 10) << "%";
-			auto result = calcEvolutionDistance(creature, 2000, 200, points, percent, false);
-			fout << percent << "\t" << points << "\t" << result << std::endl;
+	int count = 0;
+	for (double percent = start_percent; percent <= max_percent; percent += sum_percent) {
+		for (double points = start_points; points < max_points; points *= mul_points) {
+			count++;
 		}
+	}
+	for (double percent = start_percent; percent <= max_percent; percent += sum_percent) {
+		for (int points = start_points; points < max_points; points *= mul_points) {
+			performer.add([percent, points, creature, attempts, populationSize, evolutionRepeats]() -> double {
+				double sum = 0;
+				for (int i = 0; i < evolutionRepeats; i++) {
+					auto result = calcEvolutionDistance(creature, attempts, populationSize, points, percent, false);
+					sum += result;
+				}
+				sum /= evolutionRepeats;
+				return sum;
+			}, {percent, points});
+		}
+	}
+	performer.finish();
+
+	std::ofstream fout("out.txt");
+	for (auto& i : performer) {
+		fout << i.first.first << "\t" << i.first.second << "\t" << i.second << std::endl;
 	}
 	fout.close();
 }
