@@ -469,7 +469,7 @@ public:
 		auto start = mf.begin();
 		auto count = mf.size() / threads;
 		for (int i = 0; i < threads; ++i) {
-			threads_mas.push_back(std::thread([&](MF::iterator start, MF::iterator end) {
+			threads_mas.push_back(std::thread([&](typename MF::iterator start, typename MF::iterator end) {
 				for (auto i = start; i != end; ++i) {
 					auto value = i->second();
 
@@ -525,7 +525,7 @@ int main() {
 		}
 	}
 	for (double percent = start_percent; percent <= max_percent; percent += sum_percent) {
-		for (int points = start_points; points < max_points; points *= mul_points) {
+		for (double points = start_points; points < max_points; points *= mul_points) {
 			performer.add([percent, points, creature, attempts, populationSize, evolutionRepeats]() -> double {
 				double sum = 0;
 				for (int i = 0; i < evolutionRepeats; i++) {
