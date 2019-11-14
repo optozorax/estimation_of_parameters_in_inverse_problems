@@ -179,7 +179,6 @@ private:
 		}
 
 		// Сортируем существ по их оценкам
-		// TODO сравнить насколько быстро программа будет работать без этой сортировки
 		std::sort(result.begin(), result.end(), [] (const auto& a, const auto& b) -> bool {
 			return a.second > b.second;
 		});
@@ -501,7 +500,11 @@ private:
 int main() {
 	PolynomCreature creature;
 	creature.values = {-10, 0, 3.1, 88, 5, -15, 10};
-	//auto result = calcEvolutionDistance(creature, 200, 30, 15, 0.0, true);
+	auto result = calcEvolutionDistance(creature, 200, 30, 15, 0.0, true);
+	result = calcEvolutionDistance(creature, 2000, 60, 30, 0.0, true);
+	result = calcEvolutionDistance(creature, 200, 30, 200, 0.05, true);
+
+	return 0;
 
 	double max_points = 5000;
 	double start_points = 8;

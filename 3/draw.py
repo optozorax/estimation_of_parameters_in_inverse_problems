@@ -22,6 +22,8 @@ if __name__ == '__main__':
 	with open('out.txt') as f:
 		for line in f:
 			x1, y1, z1 = [float(x) for x in line.split()]
+			if y1 < 100:
+				continue
 			x.append(x1)
 			y.append(y1)
 			z.append(math.log(z1))
